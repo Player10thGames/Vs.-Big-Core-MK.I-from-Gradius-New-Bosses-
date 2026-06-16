@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vs. Big Core MK.I - Gradius New Bosses</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            border: 2px solid #333;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.2);
+        }
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+            text-shadow: 2px 2px #000;
+        }
+        .bar-container {
+            width: 200px;
+            height: 15px;
+            background: #333;
+            border: 1px solid #fff;
+        }
+        #boss-health-bar {
+            width: 100%;
+            height: 100%;
+            background: #f00;
+            transition: width 0.2s;
+        }
+        #start-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            z-index: 10;
+        }
+        h1 { color: #0ff; text-transform: uppercase; letter-spacing: 5px; }
+        .instruction { margin-top: 20px; color: #aaa; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="ui">
+        <div>SCORE: <span id="score">000000</span></div>
+        <div>
+            BOSS: 
+            <div class="bar-container">
+                <div id="boss-health-bar"></div>
+            </div>
+        </div>
+    </div>
+    <div id="start-screen">
+        <h1>VS BIG CORE MK.I</h1>
+        <p>CLICK TO START MISSION</p>
+        <div class="instruction">
+            WASD / ARROWS: MOVE | SPACE: FIRE
+        </div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreElement = document.getElementById('score');
+const bossHealthBar = document.getElementById('boss-health-bar');
+const startScreen = document.getElementById('start-screen');
+
+// Game constants
+const WIDTH = 800;
+const HEIGHT = 600;
+canvas.width = WIDTH;
+canvas.height = HEIGHT;
+
+// Game State
+let gameState = 'START';
+let score = 0;
+let frameCount = 0;
+
+// Assets
+const images = {};
+const audio = {};
+
+const assetPaths = {
+    images: {
+        bossIdle: 'sprites/BigCoreMK-I_Idle (Normal).png',
+        bossHurt: 'sprites/BigCoreMK-I_Hurt.png',
+        bossIntro: 'sprites/BigCoreMK-I_Intro.png',
+        bossDefeated: 'sprites/BigCoreMK-I_Defeated.png',
+        bossLaser: 'sprites/BigCoreMK-I_LaserBeam.png'
+    },
+    audio: {
+        bgm: 'audio/Aircraft Carrier.mp3',
+        bossBgm: 'audio/Destroy The Core.mp3',
+        laser: 'audio/BigCore_Laser.wav',
+        explosion: 'audio/BossDefeat_Explosion.wav',
+        hit: 'audio/HitBoss.wav'
+    }
+};
+
+function loadAssets() {
+    let loadedCount = 0;
+    const totalAssets = Object.keys(assetPaths.images).length + Object.keys(assetPaths.audio).length;
+
+    function checkLoaded() {
+        loadedCount++;
+        if (loadedCount === totalAssets) {
+            console.log("All assets loaded");
+        }
+    }
+
+    for (let key in assetPaths.images) {
+        images[key] = new Image();
+        images[key].src = assetPaths.images[key];
+        images[key].onload = checkLoaded;
+    }
+
+    for (let key in assetPaths.audio) {
+        audio[key] = new Audio(assetPaths.audio[key]);
+        if (key === 'bgm' || key === 'bossBgm') audio[key].loop = true;
+        audio[key].oncanplaythrough = checkLoaded;
+    }
+}
+
+// Input Handling
+const keys = {};
+window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+// Player Object
+const player = {
+    x: 50,
+    y: HEIGHT / 2,
+    width: 40,
+    height: 20,
+    speed: 5,
+    bullets: [],
+    cooldown: 0,
+    draw() {
+        ctx.fillStyle = '#0ff';
+        ctx.beginPath();
+        ctx.moveTo(this.x, this.y);
+        ctx.lineTo(this.x + this.width, this.y + this.height/2);
+        ctx.lineTo(this.x, this.y + this.height);
+        ctx.closePath();
+        ctx.fill();
+        
+        // Engine flame
+        if (frameCount % 4 < 2) {
+            ctx.fillStyle = '#f80';
+            ctx.fillRect(this.x - 10, this.y + 5, 10, 10);
+        }
+    },
+    update() {
+        if (keys['ArrowUp'] || keys['KeyW']) this.y -= this.speed;
+        if (keys['ArrowDown'] || keys['KeyS']) this.y += this.speed;
+        if (keys['ArrowLeft'] || keys['KeyA']) this.x -= this.speed;
+        if (keys['ArrowRight'] || keys['KeyD']) this.x += this.speed;
+
+        // Boundary check
+        this.x = Math.max(0, Math.min(WIDTH - this.width, this.x));
+        this.y = Math.max(0, Math.min(HEIGHT - this.height, this.y));
+
+        if (keys['Space'] && this.cooldown <= 0) {
+            this.bullets.push({ x: this.x + this.width, y: this.y + this.height / 2, speed: 10 });
+            this.cooldown = 10;
+        }
+        if (this.cooldown > 0) this.cooldown--;
+
+        this.bullets.forEach((b, i) => {
+            b.x += b.speed;
+            if (b.x > WIDTH) this.bullets.splice(i, 1);
+        });
+    }
+};
+
+// Boss Object
+const boss = {
+    x: WIDTH + 200,
+    y: HEIGHT / 2 - 100,
+    width: 200,
+    height: 120,
+    health: 100,
+    maxHealth: 100,
+    state: 'INTRO', // INTRO, IDLE, HURT, DEFEATED
+    timer: 0,
+    dy: 2,
+    lasers: [],
+    laserCooldown: 0,
+    
+    draw() {
+        let img = images.bossIdle;
+        if (this.state === 'INTRO') img = images.bossIntro;
+        if (this.state === 'HURT') img = images.bossHurt;
+        if (this.state === 'DEFEATED') img = images.bossDefeated;
+
+        if (img && img.complete) {
+            ctx.drawImage(img, this.x, this.y, this.width, this.height);
+        } else {
+            // Fallback
+            ctx.fillStyle = '#f0f';
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+        }
+
+        // Draw Lasers
+        this.lasers.forEach(l => {
+            if (images.bossLaser && images.bossLaser.complete) {
+                ctx.drawImage(images.bossLaser, l.x, l.y, l.w, l.h);
+            } else {
+                ctx.fillStyle = '#f00';
+                ctx.fillRect(l.x, l.y, l.w, l.h);
+            }
+        });
+    },
+
+    update() {
+        if (this.state === 'INTRO') {
+            this.x -= 2;
+            if (this.x <= WIDTH - 250) {
+                this.state = 'IDLE';
+                audio.bgm.pause();
+                audio.bossBgm.play();
+            }
+        } else if (this.state === 'IDLE' || this.state === 'HURT') {
+            this.y += this.dy;
+            if (this.y <= 50 || this.y >= HEIGHT - 150) this.dy *= -1;
+
+            if (this.state === 'HURT') {
+                this.timer--;
+                if (this.timer <= 0) this.state = 'IDLE';
+            }
+
+            // Shooting
+            if (this.laserCooldown <= 0) {
+                this.lasers.push({ x: this.x + 20, y: this.y + this.height/2 - 10, w: 100, h: 20, speed: -8 });
+                audio.laser.currentTime = 0;
+                audio.laser.play();
+                this.laserCooldown = 120;
+            }
+            if (this.laserCooldown > 0) this.laserCooldown--;
+        }
+
+        this.lasers.forEach((l, i) => {
+            l.x += l.speed;
+            if (l.x + l.w < 0) this.lasers.splice(i, 1);
+        });
+
+        // Collision with player bullets
+        player.bullets.forEach((b, bi) => {
+            if (b.x > this.x && b.x < this.x + this.width && b.y > this.y && b.y < this.y + this.height) {
+                if (this.state !== 'DEFEATED' && this.state !== 'INTRO') {
+                    this.health -= 2;
+                    this.state = 'HURT';
+                    this.timer = 10;
+                    score += 100;
+                    audio.hit.currentTime = 0;
+                    audio.hit.play();
+                    player.bullets.splice(bi, 1);
+                    
+                    if (this.health <= 0) {
+                        this.health = 0;
+                        this.state = 'DEFEATED';
+                        audio.bossBgm.pause();
+                        audio.explosion.play();
+                        setTimeout(() => {
+                            alert("MISSION ACCOMPLISHED! SCORE: " + score);
+                            location.reload();
+                        }, 3000);
+                    }
+                    updateUI();
+                }
+            }
+        });
+    }
+};
+
+function updateUI() {
+    scoreElement.innerText = score.toString().padStart(6, '0');
+    bossHealthBar.style.width = (boss.health / boss.maxHealth * 100) + '%';
+}
+
+function gameLoop() {
+    ctx.clearRect(0, 0, WIDTH, HEIGHT);
+    
+    // Background Stars
+    ctx.fillStyle = '#fff';
+    for(let i=0; i<50; i++) {
+        let x = (Math.sin(i + frameCount * 0.01) * WIDTH + WIDTH) % WIDTH;
+        let y = (i * 20) % HEIGHT;
+        ctx.fillRect(x, y, 2, 2);
+    }
+
+    if (gameState === 'PLAYING') {
+        player.update();
+        player.draw();
+        boss.update();
+        boss.draw();
+    }
+
+    frameCount++;
+    requestAnimationFrame(gameLoop);
+}
+
+startScreen.addEventListener('click', () => {
+    startScreen.style.display = 'none';
+    gameState = 'PLAYING';
+    audio.bgm.play();
+});
+
+loadAssets();
+gameLoop();
+
+</script>
+</body>
+</html>
